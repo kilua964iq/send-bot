@@ -9,7 +9,19 @@ from colorama import init, Fore, Style
 
 init(autoreset=True)
 
-# توكن البوت حقك (استلمه من @BotFather)
+# ========== إعدادات التخزين الدائم ==========
+DATA_DIR = os.environ.get('DATA_DIR', '.')
+SESSIONS_DIR = os.path.join(DATA_DIR, 'sessions')
+TEMP_DIR = os.path.join(DATA_DIR, 'temp')
+USERS_DIR = os.path.join(DATA_DIR, 'users_data')
+# ===========================================
+
+# إنشاء المجلدات
+os.makedirs(SESSIONS_DIR, exist_ok=True)
+os.makedirs(TEMP_DIR, exist_ok=True)
+os.makedirs(USERS_DIR, exist_ok=True)
+
+# توكن البوت
 BOT_TOKEN = "8308994457:AAGQ7QUaTgLsWybafo_cro_CuXkNAPQKYOg"
 
 # مجلدات العمل
