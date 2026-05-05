@@ -22,7 +22,7 @@ os.makedirs(TEMP_DIR, exist_ok=True)
 os.makedirs(USERS_DIR, exist_ok=True)
 
 # توكن البوت
-BOT_TOKEN = "8308994457:AAGQ7QUaTgLsWybafo_cro_CuXkNAPQKYOg"
+BOT_TOKEN = "8308994457:AAEqW53IYfDcDNiB50hf0HhMgU2y1Ktomyk"
 
 # مجلدات العمل
 os.makedirs("sessions", exist_ok=True)
