@@ -450,4 +450,4 @@ async def send_task(user_id, event):
 
 # ========== تشغيل البوت ==========
 print("🚀 البوت يعمل 24/7...")
-bot.run_until_disconnected()q
+bot.run_until_disconnected()
