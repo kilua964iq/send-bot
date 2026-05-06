@@ -24,7 +24,7 @@ if not BOT_TOKEN or not API_ID or not API_HASH:
     print("❌ يرجى تعيين BOT_TOKEN, API_ID, API_HASH في متغيرات البيئة")
     exit(1)
 
-# قفل لكل مستخدم (asyncio.Lock)
+# أقفال للمستخدمين
 user_locks = {}
 
 def get_user_lock(user_id):
@@ -137,7 +137,10 @@ async def set_delay_callback(event):
         return
     
     await event.respond(
-        "⏱ **وقت التأخير بين كل رسالة**\n\nأرسل رقمين بينهم مسافة\nمثال: 30 60",
+        "⏱ **وقت التأخير بين كل رسالة**\n\n"
+        "أرسل رقمين بينهم مسافة (أقل شيء 50 ثانية)\n"
+        "مثال: 50 140\n\n"
+        "يعني: أقل شي 50 ثانية، وأكثر شي 140 ثانية",
         parse_mode='md',
         buttons=get_back_button()
     )
@@ -205,7 +208,7 @@ async def status_callback(event):
     
     cards = user_data.get('cards', [])
     sent = user_data.get('sent_count', 0)
-    delay = user_data.get('delay_range', [30, 90])
+    delay = user_data.get('delay_range', [50, 140])
     command = user_data.get('command', 'غير محدد')
     
     text = f"""
@@ -282,7 +285,7 @@ async def handle_messages(event):
                 'cards': [],
                 'sent_count': 0,
                 'current_index': 0,
-                'delay_range': [30, 90],
+                'delay_range': [50, 140],
                 'is_sending': False
             }
             save_user_data(user_id, user_data)
@@ -316,7 +319,7 @@ async def handle_messages(event):
                 'cards': [],
                 'sent_count': 0,
                 'current_index': 0,
-                'delay_range': [30, 90],
+                'delay_range': [50, 140],
                 'is_sending': False
             }
             save_user_data(user_id, user_data)
@@ -347,15 +350,23 @@ async def handle_messages(event):
             try:
                 min_d = int(parts[0])
                 max_d = int(parts[1])
+                
+                # التأكد أن أقل شي 50 ثانية
+                if min_d < 50:
+                    await event.respond("⚠️ أقل وقت مسموح هو 50 ثانية! تم ضبطه على 50 تلقائياً")
+                    min_d = 50
+                if max_d < min_d:
+                    max_d = min_d + 30
+                
                 user_data = load_user_data(user_id)
                 user_data['delay_range'] = [min_d, max_d]
                 save_user_data(user_id, user_data)
                 del login_sessions[user_id]
-                await event.respond(f"✅ تم ضبط التأخير: {min_d} - {max_d} ثانية", buttons=get_main_keyboard(user_data))
+                await event.respond(f"✅ تم ضبط التأخير العشوائي: {min_d} - {max_d} ثانية", buttons=get_main_keyboard(user_data))
             except:
-                await event.respond("❌ أرسل رقمين صحيحين (مثال: 30 60)")
+                await event.respond("❌ أرسل رقمين صحيحين (مثال: 50 140)")
         else:
-            await event.respond("❌ أرسل رقمين بينهم مسافة (مثال: 30 60)")
+            await event.respond("❌ أرسل رقمين بينهم مسافة (مثال: 50 140)")
         return
     
     if step == "waiting_for_file":
@@ -411,7 +422,7 @@ async def handle_messages(event):
         )
         return
 
-# ========== مهمة الإرسال ==========
+# ========== مهمة الإرسال (المعدلة) ==========
 async def send_task(user_id, event):
     user_lock = get_user_lock(user_id)
     
@@ -430,7 +441,7 @@ async def send_task(user_id, event):
             cards = user_data.get('cards', [])
             target = user_data.get('target_bot')
             command = user_data.get('command', '/ad')
-            delay_range = user_data.get('delay_range', [30, 90])
+            delay_range = user_data.get('delay_range', [50, 140])
             start_idx = user_data.get('current_index', 0)
             
             for i in range(start_idx, len(cards)):
@@ -447,12 +458,21 @@ async def send_task(user_id, event):
                     user_data['current_index'] = i + 1
                     save_user_data(user_id, user_data)
                     
+                    # تأخير عشوائي حقيقي بين أقل وأكثر
                     delay = random.randint(delay_range[0], delay_range[1])
-                    await event.respond(f"✅ [{i+1}/{len(cards)}] تم الإرسال: {cards[i][:40]}...\n⏱ انتظر {delay} ثانية")
-                    await asyncio.sleep(delay)
+                    
+                    await event.respond(f"✅ [{i+1}/{len(cards)}] تم الإرسال: {cards[i][:40]}...\n⏱ انتظر {delay} ثانية (عشوائي)")
+                    
+                    # تقسيم التأخير إلى أجزاء صغيرة عشان ما يعلق
+                    for _ in range(delay):
+                        await asyncio.sleep(1)
+                        # التحقق إذا طلب المستخدم الإيقاف
+                        current = load_user_data(user_id)
+                        if not current.get('is_sending'):
+                            break
                     
                 except FloodWaitError as e:
-                    await event.respond(f"⚠️ انتظر {e.seconds} ثانية")
+                    await event.respond(f"⚠️ انتظر {e.seconds} ثانية (FloodWait)")
                     await asyncio.sleep(e.seconds)
                 except Exception as e:
                     await event.respond(f"❌ خطأ: {str(e)[:50]}")
@@ -466,7 +486,11 @@ async def send_task(user_id, event):
             await event.respond(f"❌ خطأ جلسة: {str(e)[:100]}")
         finally:
             if client:
-                await client.disconnect()
+                try:
+                    # إغلاق بدون حفظ الحالة لتجنب database is locked
+                    await client.disconnect()
+                except:
+                    pass
 
 # ========== تشغيل البوت ==========
 print("🚀 البوت يعمل 24/7...")
