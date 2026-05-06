@@ -24,7 +24,7 @@ if not BOT_TOKEN or not API_ID or not API_HASH:
     print("❌ يرجى تعيين BOT_TOKEN, API_ID, API_HASH في متغيرات البيئة")
     exit(1)
 
-# أقفال للمستخدمين
+# أقفال للمستخدمين (لكل مستخدم قفل منفصل)
 user_locks = {}
 
 def get_user_lock(user_id):
@@ -57,11 +57,6 @@ def get_main_keyboard(user_data):
     if not user_data.get('logged_in'):
         return [[Button.inline("🔐 تسجيل الدخول", b"login")]]
     return [
-        [Button.inline("🎯 البوت الهدف", b"set_target")],
-        [Button.inline("⚡ وقت التأخير", b"set_delay")],
-        [Button.inline("📁 رفع الملف", b"upload_file")],
-        [Button.inline("🚀 بدء الإرسال", b"start_sending")],
-        [Button.inline("🛑 إيقاف الإرسال", b"stop_sending")],
         [Button.inline("📊 الحالة", b"status")],
         [Button.inline("🚪 تسجيل الخروج", b"logout")]
     ]
@@ -81,10 +76,12 @@ async def start_cmd(event):
     user_id = str(event.sender_id)
     user_data = load_user_data(user_id)
     
-    if user_data.get('logged_in'):
-        text = "✅ مرحباً! أنت مسجل دخول.\n\nاختر ما تريد:"
+    if user_data.get('logged_in') and user_data.get('setup_complete'):
+        text = "✅ مرحباً! أنت مسجل دخول ومكتمل الإعداد.\n\nاضغط على 📊 الحالة لمتابعة الفحص"
+    elif user_data.get('logged_in'):
+        text = "✅ أنت مسجل دخول!\n\nأرسل ملف `.txt` الآن لبدء الإعداد"
     else:
-        text = "🔐 أهلاً بك في بوت الإرسال الذكي!\n\nاضغط على زر تسجيل الدخول للمتابعة."
+        text = "🔐 أهلاً بك!\n\nاضغط على زر تسجيل الدخول للمتابعة"
     
     await event.respond(text, buttons=get_main_keyboard(user_data))
 
@@ -115,88 +112,6 @@ async def logout_callback(event):
     else:
         await event.answer("أنت غير مسجل دخول!", alert=True)
 
-@bot.on(events.CallbackQuery(data=b"set_target"))
-async def set_target_callback(event):
-    user_id = str(event.sender_id)
-    user_data = load_user_data(user_id)
-    
-    if not user_data.get('logged_in'):
-        await event.answer("⚠️ سجل دخول أولاً!", alert=True)
-        return
-    
-    await event.respond("🎯 أرسل يوزر البوت الهدف\nمثال: @example_bot", buttons=get_back_button())
-    login_sessions[user_id] = {"step": "target"}
-
-@bot.on(events.CallbackQuery(data=b"set_delay"))
-async def set_delay_callback(event):
-    user_id = str(event.sender_id)
-    user_data = load_user_data(user_id)
-    
-    if not user_data.get('logged_in'):
-        await event.answer("⚠️ سجل دخول أولاً!", alert=True)
-        return
-    
-    await event.respond(
-        "⏱ **وقت التأخير بين كل رسالة**\n\n"
-        "أرسل رقمين بينهم مسافة (أقل شيء 50 ثانية)\n"
-        "مثال: 50 140\n\n"
-        "يعني: أقل شي 50 ثانية، وأكثر شي 140 ثانية",
-        parse_mode='md',
-        buttons=get_back_button()
-    )
-    login_sessions[user_id] = {"step": "delay"}
-
-@bot.on(events.CallbackQuery(data=b"upload_file"))
-async def upload_file_callback(event):
-    user_id = str(event.sender_id)
-    user_data = load_user_data(user_id)
-    
-    if not user_data.get('logged_in'):
-        await event.answer("⚠️ سجل دخول أولاً!", alert=True)
-        return
-    
-    await event.respond("📁 أرسل ملف txt يحتوي على البطاقات\n(كل بطاقة في سطر)", buttons=get_back_button())
-    login_sessions[user_id] = {"step": "waiting_for_file"}
-
-@bot.on(events.CallbackQuery(data=b"start_sending"))
-async def start_sending_callback(event):
-    user_id = str(event.sender_id)
-    user_data = load_user_data(user_id)
-    
-    if not user_data.get('logged_in'):
-        await event.answer("⚠️ سجل دخول أولاً!", alert=True)
-        return
-    if not user_data.get('target_bot'):
-        await event.answer("⚠️ حدد البوت الهدف أولاً!", alert=True)
-        return
-    if not user_data.get('command'):
-        await event.answer("⚠️ ارفع ملف أولاً لتحديد الأمر!", alert=True)
-        return
-    if not user_data.get('cards'):
-        await event.answer("⚠️ ارفع ملف البطاقات أولاً!", alert=True)
-        return
-    if user_data.get('is_sending'):
-        await event.answer("⚠️ يوجد إرسال قيد التشغيل!", alert=True)
-        return
-    
-    await event.answer("🚀 جاري البدء...", alert=True)
-    await event.respond("🚀 بدء عملية الإرسال...")
-    
-    asyncio.create_task(send_task(user_id, event))
-
-@bot.on(events.CallbackQuery(data=b"stop_sending"))
-async def stop_sending_callback(event):
-    user_id = str(event.sender_id)
-    user_data = load_user_data(user_id)
-    
-    if user_data.get('is_sending'):
-        user_data['is_sending'] = False
-        save_user_data(user_id, user_data)
-        await event.answer("🛑 تم إيقاف الإرسال", alert=True)
-        await event.respond("🛑 تم إيقاف الإرسال", buttons=get_main_keyboard(user_data))
-    else:
-        await event.answer("⚠️ لا توجد عملية نشطة", alert=True)
-
 @bot.on(events.CallbackQuery(data=b"status"))
 async def status_callback(event):
     user_id = str(event.sender_id)
@@ -208,16 +123,27 @@ async def status_callback(event):
     
     cards = user_data.get('cards', [])
     sent = user_data.get('sent_count', 0)
-    delay = user_data.get('delay_range', [50, 140])
-    command = user_data.get('command', 'غير محدد')
+    delay = user_data.get('delay_range', ['لم يحدد', 'لم يحدد'])
+    command = user_data.get('command', 'لم يحدد')
+    target = user_data.get('target_bot', 'لم يحدد')
+    
+    if user_data.get('is_sending'):
+        status = "🟢 جاري الإرسال..."
+    elif user_data.get('setup_complete'):
+        status = "✅ جاهز للفحص"
+    else:
+        status = "⏳ الإعداد غير مكتمل"
     
     text = f"""
 📊 **حالة الحساب**
 ━━━━━━━━━━━━━━
 🔐 مسجل دخول: ✅ نعم
-🎯 البوت الهدف: {user_data.get('target_bot', 'غير محدد')}
-📝 الأمر المستخدم: {command}
+📊 الحالة: {status}
+━━━━━━━━━━━━━━
+🎯 البوت الهدف: {target}
+📝 أمر الفحص: {command}
 ⏱ وقت التأخير: {delay[0]} - {delay[1]} ثانية
+━━━━━━━━━━━━━━
 📦 عدد البطاقات: {len(cards)}
 ✅ تم الإرسال: {sent}
 ⏳ المتبقي: {len(cards) - sent}
@@ -242,197 +168,257 @@ async def handle_messages(event):
     user_id = str(event.sender_id)
     text = event.raw_text.strip()
     
-    if user_id not in login_sessions:
-        return
-    
-    step = login_sessions[user_id].get("step")
-    
-    if step == "phone":
-        phone = text
-        if not phone.startswith('+'):
-            phone = '+' + phone
+    # إذا كان المستخدم في جلسة تسجيل دخول
+    if user_id in login_sessions:
+        step = login_sessions[user_id].get("step")
         
-        login_sessions[user_id]["phone"] = phone
-        login_sessions[user_id]["step"] = "code"
-        
-        session_name = get_user_session_name(user_id)
-        client = TelegramClient(session_name, API_ID, API_HASH)
-        login_sessions[user_id]["client"] = client
-        
-        await client.connect()
-        try:
-            await client.send_code_request(phone)
-            await event.respond("📨 تم إرسال رمز التحقق!\nأرسل الرمز الآن:", buttons=get_back_button())
-        except Exception as e:
-            await event.respond(f"❌ خطأ: {str(e)[:100]}")
-            del login_sessions[user_id]
-        return
-    
-    if step == "code":
-        code = text
-        client = login_sessions[user_id].get("client")
-        phone = login_sessions[user_id].get("phone")
-        
-        try:
-            await client.sign_in(phone, code)
-            me = await client.get_me()
+        if step == "phone":
+            phone = text
+            if not phone.startswith('+'):
+                phone = '+' + phone
             
-            user_data = {
-                'logged_in': True,
-                'phone': phone,
-                'target_bot': None,
-                'command': None,
-                'cards': [],
-                'sent_count': 0,
-                'current_index': 0,
-                'delay_range': [50, 140],
-                'is_sending': False
-            }
-            save_user_data(user_id, user_data)
-            del login_sessions[user_id]
+            login_sessions[user_id]["phone"] = phone
+            login_sessions[user_id]["step"] = "code"
             
-            await event.respond(
-                f"✅ تم تسجيل الدخول بنجاح!\n👤 {me.first_name}",
-                buttons=get_main_keyboard(user_data)
-            )
-        except SessionPasswordNeededError:
-            login_sessions[user_id]["step"] = "password"
-            await event.respond("🔐 مطلوب كلمة مرور (2FA)\nأرسل كلمة المرور:", buttons=get_back_button())
-        except Exception as e:
-            await event.respond(f"❌ خطأ: {str(e)[:100]}")
-            del login_sessions[user_id]
-        return
-    
-    if step == "password":
-        password = text
-        client = login_sessions[user_id].get("client")
-        
-        try:
-            await client.sign_in(password=password)
-            me = await client.get_me()
+            session_name = get_user_session_name(user_id)
+            client = TelegramClient(session_name, API_ID, API_HASH)
+            login_sessions[user_id]["client"] = client
             
-            user_data = {
-                'logged_in': True,
-                'phone': login_sessions[user_id].get("phone"),
-                'target_bot': None,
-                'command': None,
-                'cards': [],
-                'sent_count': 0,
-                'current_index': 0,
-                'delay_range': [50, 140],
-                'is_sending': False
-            }
-            save_user_data(user_id, user_data)
-            del login_sessions[user_id]
-            
-            await event.respond(
-                f"✅ تم تسجيل الدخول بنجاح!\n👤 {me.first_name}",
-                buttons=get_main_keyboard(user_data)
-            )
-        except Exception as e:
-            await event.respond(f"❌ كلمة مرور خاطئة: {str(e)[:100]}")
-        return
-    
-    if step == "target":
-        if text.startswith('@'):
-            user_data = load_user_data(user_id)
-            user_data['target_bot'] = text
-            save_user_data(user_id, user_data)
-            del login_sessions[user_id]
-            await event.respond(f"✅ تم تعيين البوت الهدف: {text}", buttons=get_main_keyboard(user_data))
-        else:
-            await event.respond("❌ يرجى إرسال يوزر يبدأ بـ @")
-        return
-    
-    if step == "delay":
-        parts = text.split()
-        if len(parts) >= 2:
+            await client.connect()
             try:
-                min_d = int(parts[0])
-                max_d = int(parts[1])
-                
-                # التأكد أن أقل شي 50 ثانية
-                if min_d < 50:
-                    await event.respond("⚠️ أقل وقت مسموح هو 50 ثانية! تم ضبطه على 50 تلقائياً")
-                    min_d = 50
-                if max_d < min_d:
-                    max_d = min_d + 30
-                
-                user_data = load_user_data(user_id)
-                user_data['delay_range'] = [min_d, max_d]
-                save_user_data(user_id, user_data)
+                await client.send_code_request(phone)
+                await event.respond("📨 تم إرسال رمز التحقق!\nأرسل الرمز الآن:", buttons=get_back_button())
+            except Exception as e:
+                await event.respond(f"❌ خطأ: {str(e)[:100]}")
                 del login_sessions[user_id]
-                await event.respond(f"✅ تم ضبط التأخير العشوائي: {min_d} - {max_d} ثانية", buttons=get_main_keyboard(user_data))
-            except:
-                await event.respond("❌ أرسل رقمين صحيحين (مثال: 50 140)")
-        else:
-            await event.respond("❌ أرسل رقمين بينهم مسافة (مثال: 50 140)")
-        return
-    
-    if step == "waiting_for_file":
-        if event.document and event.document.mime_type == "text/plain":
-            file_path = os.path.join(TEMP_DIR, f"{user_id}_cards.txt")
-            await event.download_media(file_path)
-            
-            with open(file_path, 'r') as f:
-                cards = [line.strip() for line in f if line.strip()]
-            
-            login_sessions[user_id]["cards"] = cards
-            login_sessions[user_id]["step"] = "waiting_for_command"
-            
-            await event.respond(
-                f"✅ تم رفع {len(cards)} بطاقة\n\n"
-                "📝 **بأي أمر تريد فحص البطاقات؟**\n"
-                "أرسل الأمر كاملاً (مثال: /ad  أو  /cc  أو  /check)",
-                parse_mode='md',
-                buttons=get_back_button()
-            )
-        else:
-            await event.respond("❌ يرجى إرسال ملف txt صالح")
-        return
-    
-    if step == "waiting_for_command":
-        command = text.strip()
-        if not command.startswith('/'):
-            command = '/' + command
-        
-        cards = login_sessions[user_id].get("cards", [])
-        
-        if not cards:
-            await event.respond("❌ لا توجد بطاقات! ارفع الملف مرة أخرى")
-            del login_sessions[user_id]
             return
         
-        user_data = load_user_data(user_id)
-        user_data['cards'] = cards
-        user_data['command'] = command
-        user_data['sent_count'] = 0
-        user_data['current_index'] = 0
-        user_data['is_sending'] = False
-        save_user_data(user_id, user_data)
+        if step == "code":
+            code = text
+            client = login_sessions[user_id].get("client")
+            phone = login_sessions[user_id].get("phone")
+            
+            try:
+                await client.sign_in(phone, code)
+                me = await client.get_me()
+                
+                user_data = {
+                    'logged_in': True,
+                    'setup_complete': False,
+                    'phone': phone,
+                    'target_bot': None,
+                    'command': None,
+                    'cards': [],
+                    'sent_count': 0,
+                    'current_index': 0,
+                    'delay_range': [50, 140],
+                    'is_sending': False
+                }
+                save_user_data(user_id, user_data)
+                del login_sessions[user_id]
+                
+                await event.respond(
+                    f"✅ تم تسجيل الدخول بنجاح!\n👤 {me.first_name}\n\n📁 **أرسل ملف txt الآن**",
+                    parse_mode='md',
+                    buttons=get_back_button()
+                )
+                # ننتظر الملف مباشرة
+                login_sessions[user_id] = {"step": "waiting_for_file"}
+                
+            except SessionPasswordNeededError:
+                login_sessions[user_id]["step"] = "password"
+                await event.respond("🔐 مطلوب كلمة مرور (2FA)\nأرسل كلمة المرور:", buttons=get_back_button())
+            except Exception as e:
+                await event.respond(f"❌ خطأ: {str(e)[:100]}")
+                del login_sessions[user_id]
+            return
         
-        del login_sessions[user_id]
+        if step == "password":
+            password = text
+            client = login_sessions[user_id].get("client")
+            
+            try:
+                await client.sign_in(password=password)
+                me = await client.get_me()
+                
+                user_data = {
+                    'logged_in': True,
+                    'setup_complete': False,
+                    'phone': login_sessions[user_id].get("phone"),
+                    'target_bot': None,
+                    'command': None,
+                    'cards': [],
+                    'sent_count': 0,
+                    'current_index': 0,
+                    'delay_range': [50, 140],
+                    'is_sending': False
+                }
+                save_user_data(user_id, user_data)
+                del login_sessions[user_id]
+                
+                await event.respond(
+                    f"✅ تم تسجيل الدخول بنجاح!\n👤 {me.first_name}\n\n📁 **أرسل ملف txt الآن**",
+                    parse_mode='md',
+                    buttons=get_back_button()
+                )
+                login_sessions[user_id] = {"step": "waiting_for_file"}
+                
+            except Exception as e:
+                await event.respond(f"❌ كلمة مرور خاطئة: {str(e)[:100]}")
+            return
         
-        await event.respond(
-            f"✅ تم تعيين الأمر: `{command}`\n"
-            f"📦 عدد البطاقات: {len(cards)}\n\n"
-            "اضغط على **🚀 بدء الإرسال** لبدء الفحص",
-            parse_mode='md',
-            buttons=get_main_keyboard(user_data)
-        )
-        return
+        # ========== استقبال الملف ==========
+        if step == "waiting_for_file":
+            if event.document and event.document.mime_type == "text/plain":
+                file_path = os.path.join(TEMP_DIR, f"{user_id}_cards.txt")
+                await event.download_media(file_path)
+                
+                with open(file_path, 'r') as f:
+                    cards = [line.strip() for line in f if line.strip()]
+                
+                # حفظ البطاقات في ملف المستخدم
+                user_data = load_user_data(user_id)
+                user_data['cards'] = cards
+                user_data['sent_count'] = 0
+                user_data['current_index'] = 0
+                save_user_data(user_id, user_data)
+                
+                del login_sessions[user_id]
+                
+                await event.respond(
+                    f"✅ تم رفع {len(cards)} بطاقة\n\n"
+                    "🎯 **أرسل يوزر البوت الهدف**\nمثال: @example_bot",
+                    parse_mode='md',
+                    buttons=get_back_button()
+                )
+                login_sessions[user_id] = {"step": "waiting_target"}
+            else:
+                await event.respond("❌ يرجى إرسال ملف txt صالح")
+            return
+        
+        # ========== استقبال البوت الهدف ==========
+        if step == "waiting_target":
+            if text.startswith('@'):
+                user_data = load_user_data(user_id)
+                user_data['target_bot'] = text
+                save_user_data(user_id, user_data)
+                
+                del login_sessions[user_id]
+                
+                await event.respond(
+                    f"✅ تم تعيين البوت الهدف: {text}\n\n"
+                    "⏱ **أرسل وقت التأخير** (أقل شيء 50 ثانية)\n"
+                    "أرسل رقمين بينهم مسافة\nمثال: 50 140",
+                    parse_mode='md',
+                    buttons=get_back_button()
+                )
+                login_sessions[user_id] = {"step": "waiting_delay"}
+            else:
+                await event.respond("❌ يرجى إرسال يوزر يبدأ بـ @")
+            return
+        
+        # ========== استقبال وقت التأخير ==========
+        if step == "waiting_delay":
+            parts = text.split()
+            if len(parts) >= 2:
+                try:
+                    min_d = int(parts[0])
+                    max_d = int(parts[1])
+                    
+                    if min_d < 50:
+                        await event.respond("⚠️ أقل وقت مسموح هو 50 ثانية! تم ضبطه على 50 تلقائياً")
+                        min_d = 50
+                    if max_d < min_d:
+                        max_d = min_d + 30
+                    
+                    user_data = load_user_data(user_id)
+                    user_data['delay_range'] = [min_d, max_d]
+                    save_user_data(user_id, user_data)
+                    
+                    del login_sessions[user_id]
+                    
+                    await event.respond(
+                        f"✅ تم ضبط التأخير: {min_d} - {max_d} ثانية\n\n"
+                        "📝 **أرسل أمر الفحص**\nمثال: /ad  أو  /cc",
+                        parse_mode='md',
+                        buttons=get_back_button()
+                    )
+                    login_sessions[user_id] = {"step": "waiting_command"}
+                except:
+                    await event.respond("❌ أرسل رقمين صحيحين (مثال: 50 140)")
+            else:
+                await event.respond("❌ أرسل رقمين بينهم مسافة (مثال: 50 140)")
+            return
+        
+        # ========== استقبال أمر الفحص ==========
+        if step == "waiting_command":
+            command = text.strip()
+            if not command.startswith('/'):
+                command = '/' + command
+            
+            user_data = load_user_data(user_id)
+            user_data['command'] = command
+            user_data['setup_complete'] = True
+            save_user_data(user_id, user_data)
+            
+            del login_sessions[user_id]
+            
+            cards_count = len(user_data.get('cards', []))
+            target = user_data.get('target_bot')
+            delay = user_data.get('delay_range', [50, 140])
+            
+            await event.respond(
+                f"✅ **اكتمل الإعداد بنجاح!**\n"
+                f"━━━━━━━━━━━━━━━━━━\n"
+                f"🎯 البوت الهدف: {target}\n"
+                f"📝 أمر الفحص: {command}\n"
+                f"⏱ وقت التأخير: {delay[0]} - {delay[1]} ثانية\n"
+                f"📦 عدد البطاقات: {cards_count}\n"
+                f"━━━━━━━━━━━━━━━━━━\n"
+                f"🚀 **جاري بدء الفحص تلقائياً...**",
+                parse_mode='md',
+                buttons=get_main_keyboard(user_data)
+            )
+            
+            # بدء الفحص تلقائياً
+            asyncio.create_task(send_task(user_id, event))
+            return
+    
+    # إذا كان المستخدم مسجل دخول وليس في جلسة، نتعامل مع أوامر أخرى
+    user_data = load_user_data(user_id)
+    if user_data.get('logged_in') and user_id not in login_sessions:
+        if text == "/start":
+            return
+        
+        # إذا كان الفحص قيد التشغيل، نمنع إرسال ملف جديد
+        if user_data.get('is_sending'):
+            await event.respond("⚠️ يوجد فحص قيد التشغيل! انتظر حتى ينتهي أو أوقفه من القائمة")
+            return
 
-# ========== مهمة الإرسال (المعدلة) ==========
+# ========== مهمة الإرسال ==========
 async def send_task(user_id, event):
     user_lock = get_user_lock(user_id)
     
     async with user_lock:
         user_data = load_user_data(user_id)
+        
+        if user_data.get('is_sending'):
+            await event.respond("⚠️ يوجد فحص قيد التشغيل بالفعل!")
+            return
+        
         user_data['is_sending'] = True
         save_user_data(user_id, user_data)
         
         session_name = get_user_session_name(user_id)
         client = None
+        
+        # حذف ملف الجلسة القديم إذا وجد
+        session_file = session_name + ".session"
+        if os.path.exists(session_file):
+            try:
+                os.remove(session_file)
+            except:
+                pass
         
         try:
             client = TelegramClient(session_name, API_ID, API_HASH)
@@ -443,6 +429,8 @@ async def send_task(user_id, event):
             command = user_data.get('command', '/ad')
             delay_range = user_data.get('delay_range', [50, 140])
             start_idx = user_data.get('current_index', 0)
+            
+            await event.respond(f"🚀 **بدء إرسال {len(cards)} بطاقة**\n⏱ تأخير عشوائي {delay_range[0]}-{delay_range[1]} ثانية")
             
             for i in range(start_idx, len(cards)):
                 current_data = load_user_data(user_id)
@@ -458,40 +446,53 @@ async def send_task(user_id, event):
                     user_data['current_index'] = i + 1
                     save_user_data(user_id, user_data)
                     
-                    # تأخير عشوائي حقيقي بين أقل وأكثر
+                    # تأخير عشوائي
                     delay = random.randint(delay_range[0], delay_range[1])
                     
-                    await event.respond(f"✅ [{i+1}/{len(cards)}] تم الإرسال: {cards[i][:40]}...\n⏱ انتظر {delay} ثانية (عشوائي)")
+                    await event.respond(f"✅ [{i+1}/{len(cards)}] تم الإرسال\n⏱ انتظر {delay} ثانية")
                     
-                    # تقسيم التأخير إلى أجزاء صغيرة عشان ما يعلق
+                    # التأخير مع إمكانية الإيقاف
                     for _ in range(delay):
-                        await asyncio.sleep(1)
-                        # التحقق إذا طلب المستخدم الإيقاف
                         current = load_user_data(user_id)
                         if not current.get('is_sending'):
                             break
+                        await asyncio.sleep(1)
                     
                 except FloodWaitError as e:
                     await event.respond(f"⚠️ انتظر {e.seconds} ثانية (FloodWait)")
                     await asyncio.sleep(e.seconds)
                 except Exception as e:
-                    await event.respond(f"❌ خطأ: {str(e)[:50]}")
+                    await event.respond(f"❌ خطأ في الإرسال: {str(e)[:50]}")
                     await asyncio.sleep(5)
             
             user_data['is_sending'] = False
             save_user_data(user_id, user_data)
-            await event.respond("🎉 تم الانتهاء من الإرسال!")
+            await event.respond("🎉 **تم الانتهاء من إرسال جميع البطاقات!**")
             
         except Exception as e:
-            await event.respond(f"❌ خطأ جلسة: {str(e)[:100]}")
+            await event.respond(f"❌ خطأ في الجلسة: {str(e)[:100]}")
+            user_data['is_sending'] = False
+            save_user_data(user_id, user_data)
         finally:
             if client:
                 try:
-                    # إغلاق بدون حفظ الحالة لتجنب database is locked
                     await client.disconnect()
+                except:
+                    pass
+            # حذف ملف الجلسة بعد الانتهاء
+            if os.path.exists(session_file):
+                try:
+                    os.remove(session_file)
                 except:
                     pass
 
 # ========== تشغيل البوت ==========
 print("🚀 البوت يعمل 24/7...")
-bot.run_until_disconnected()
+print("✅ يدعم عدة مستخدمين في نفس الوقت")
+
+while True:
+    try:
+        bot.run_until_disconnected()
+    except Exception as e:
+        print(f"❌ خطأ: {e}")
+        time.sleep(5)
