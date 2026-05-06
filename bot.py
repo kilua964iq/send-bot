@@ -5,7 +5,6 @@ import asyncio
 import json
 from telethon import TelegramClient, events, Button
 from telethon.errors import FloodWaitError, SessionPasswordNeededError
-from concurrent.locks import Lock
 
 # ========== إعدادات التخزين ==========
 DATA_DIR = os.environ.get('DATA_DIR', '.')
@@ -25,7 +24,7 @@ if not BOT_TOKEN or not API_ID or not API_HASH:
     print("❌ يرجى تعيين BOT_TOKEN, API_ID, API_HASH في متغيرات البيئة")
     exit(1)
 
-# قفل لكل مستخدم لمنع التزاحم على قاعدة البيانات
+# قفل لكل مستخدم (asyncio.Lock)
 user_locks = {}
 
 def get_user_lock(user_id):
@@ -180,7 +179,6 @@ async def start_sending_callback(event):
     await event.answer("🚀 جاري البدء...", alert=True)
     await event.respond("🚀 بدء عملية الإرسال...")
     
-    # تشغيل المهمة في الخلفية مع قفل للمستخدم
     asyncio.create_task(send_task(user_id, event))
 
 @bot.on(events.CallbackQuery(data=b"stop_sending"))
@@ -360,7 +358,6 @@ async def handle_messages(event):
             await event.respond("❌ أرسل رقمين بينهم مسافة (مثال: 30 60)")
         return
     
-    # ========== رفع الملف وطلب الأمر ==========
     if step == "waiting_for_file":
         if event.document and event.document.mime_type == "text/plain":
             file_path = os.path.join(TEMP_DIR, f"{user_id}_cards.txt")
@@ -383,7 +380,6 @@ async def handle_messages(event):
             await event.respond("❌ يرجى إرسال ملف txt صالح")
         return
     
-    # معالجة الأمر بعد رفع الملف
     if step == "waiting_for_command":
         command = text.strip()
         if not command.startswith('/'):
@@ -415,9 +411,8 @@ async def handle_messages(event):
         )
         return
 
-# ========== مهمة الإرسال (المعدلة) ==========
+# ========== مهمة الإرسال ==========
 async def send_task(user_id, event):
-    # استخدام قفل لمنع تزاحم العمليات على نفس المستخدم
     user_lock = get_user_lock(user_id)
     
     async with user_lock:
@@ -429,7 +424,6 @@ async def send_task(user_id, event):
         client = None
         
         try:
-            # إنشاء عميل جديد لكل مهمة
             client = TelegramClient(session_name, API_ID, API_HASH)
             await client.start()
             
