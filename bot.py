@@ -145,7 +145,7 @@ async def upload_file_callback(event):
         return
     
     await event.respond("📁 أرسل ملف txt يحتوي على البطاقات\n(كل بطاقة في سطر)", buttons=get_back_button())
-    login_sessions[user_id] = {"step": "file"}
+    login_sessions[user_id] = {"step": "waiting_for_file"}
 
 @bot.on(events.CallbackQuery(data=b"start_sending"))
 async def start_sending_callback(event):
@@ -157,6 +157,9 @@ async def start_sending_callback(event):
         return
     if not user_data.get('target_bot'):
         await event.answer("⚠️ حدد البوت الهدف أولاً!", alert=True)
+        return
+    if not user_data.get('command'):
+        await event.answer("⚠️ ارفع ملف أولاً لتحديد الأمر!", alert=True)
         return
     if not user_data.get('cards'):
         await event.answer("⚠️ ارفع ملف البطاقات أولاً!", alert=True)
@@ -194,12 +197,14 @@ async def status_callback(event):
     cards = user_data.get('cards', [])
     sent = user_data.get('sent_count', 0)
     delay = user_data.get('delay_range', [30, 90])
+    command = user_data.get('command', 'غير محدد')
     
     text = f"""
 📊 **حالة الحساب**
 ━━━━━━━━━━━━━━
 🔐 مسجل دخول: ✅ نعم
 🎯 البوت الهدف: {user_data.get('target_bot', 'غير محدد')}
+📝 الأمر المستخدم: {command}
 ⏱ وقت التأخير: {delay[0]} - {delay[1]} ثانية
 📦 عدد البطاقات: {len(cards)}
 ✅ تم الإرسال: {sent}
@@ -261,6 +266,7 @@ async def handle_messages(event):
                 'logged_in': True,
                 'phone': phone,
                 'target_bot': None,
+                'command': None,
                 'cards': [],
                 'sent_count': 0,
                 'current_index': 0,
@@ -294,6 +300,7 @@ async def handle_messages(event):
                 'logged_in': True,
                 'phone': login_sessions[user_id].get("phone"),
                 'target_bot': None,
+                'command': None,
                 'cards': [],
                 'sent_count': 0,
                 'current_index': 0,
@@ -339,7 +346,8 @@ async def handle_messages(event):
             await event.respond("❌ أرسل رقمين بينهم مسافة (مثال: 30 60)")
         return
     
-    if step == "file":
+    # ========== الجزء الجديد: استقبال الملف ثم طلب الأمر ==========
+    if step == "waiting_for_file":
         if event.document and event.document.mime_type == "text/plain":
             file_path = os.path.join(TEMP_DIR, f"{user_id}_cards.txt")
             await event.download_media(file_path)
@@ -347,16 +355,54 @@ async def handle_messages(event):
             with open(file_path, 'r') as f:
                 cards = [line.strip() for line in f if line.strip()]
             
-            user_data = load_user_data(user_id)
-            user_data['cards'] = cards
-            user_data['sent_count'] = 0
-            user_data['current_index'] = 0
-            save_user_data(user_id, user_data)
-            del login_sessions[user_id]
+            # حفظ البطاقات في الجلسة المؤقتة
+            login_sessions[user_id]["cards"] = cards
+            login_sessions[user_id]["step"] = "waiting_for_command"
             
-            await event.respond(f"✅ تم رفع {len(cards)} بطاقة", buttons=get_main_keyboard(user_data))
+            await event.respond(
+                f"✅ تم رفع {len(cards)} بطاقة\n\n"
+                "📝 **بأي أمر تريد فحص البطاقات؟**\n"
+                "أرسل الأمر كاملاً (مثال: /ad  أو  /cc  أو  /check)",
+                parse_mode='md',
+                buttons=get_back_button()
+            )
         else:
             await event.respond("❌ يرجى إرسال ملف txt صالح")
+        return
+    
+    # معالجة الأمر بعد رفع الملف
+    if step == "waiting_for_command":
+        command = text.strip()
+        if not command.startswith('/'):
+            command = '/' + command
+        
+        cards = login_sessions[user_id].get("cards", [])
+        target_bot = login_sessions[user_id].get("target_bot")
+        
+        if not cards:
+            await event.respond("❌ لا توجد بطاقات! ارفع الملف مرة أخرى")
+            del login_sessions[user_id]
+            return
+        
+        # حفظ في ملف المستخدم
+        user_data = load_user_data(user_id)
+        user_data['cards'] = cards
+        user_data['command'] = command
+        user_data['sent_count'] = 0
+        user_data['current_index'] = 0
+        user_data['is_sending'] = False
+        save_user_data(user_id, user_data)
+        
+        # حذف الجلسة المؤقتة
+        del login_sessions[user_id]
+        
+        await event.respond(
+            f"✅ تم تعيين الأمر: `{command}`\n"
+            f"📦 عدد البطاقات: {len(cards)}\n\n"
+            "اضغط على **🚀 بدء الإرسال** لبدء الفحص",
+            parse_mode='md',
+            buttons=get_main_keyboard(user_data)
+        )
         return
 
 # ========== مهمة الإرسال ==========
@@ -371,6 +417,7 @@ async def send_task(user_id, event):
     
     cards = user_data.get('cards', [])
     target = user_data.get('target_bot')
+    command = user_data.get('command', '/ad')  # الأمر اللي خزنه المستخدم
     delay_range = user_data.get('delay_range', [30, 90])
     start_idx = user_data.get('current_index', 0)
     
@@ -381,14 +428,16 @@ async def send_task(user_id, event):
             break
         
         try:
-            await client.send_message(target, cards[i])
+            # إرسال الأمر + البطاقة معاً
+            full_message = f"{command} {cards[i]}"
+            await client.send_message(target, full_message)
             
             user_data['sent_count'] = i + 1
             user_data['current_index'] = i + 1
             save_user_data(user_id, user_data)
             
             delay = random.randint(delay_range[0], delay_range[1])
-            await event.respond(f"✅ [{i+1}/{len(cards)}] تم الإرسال: {cards[i][:40]}...\n⏱ انتظر {delay} ثانية")
+            await event.respond(f"✅ [{i+1}/{len(cards)}] تم الإرسال: {cards[i][:40]}...\n📝 الأمر: {command}\n⏱ انتظر {delay} ثانية")
             await asyncio.sleep(delay)
             
         except FloodWaitError as e:
