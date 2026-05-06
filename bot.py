@@ -5,6 +5,7 @@ import asyncio
 import json
 from telethon import TelegramClient, events, Button
 from telethon.errors import FloodWaitError, SessionPasswordNeededError
+from concurrent.locks import Lock
 
 # ========== إعدادات التخزين ==========
 DATA_DIR = os.environ.get('DATA_DIR', '.')
@@ -24,6 +25,14 @@ if not BOT_TOKEN or not API_ID or not API_HASH:
     print("❌ يرجى تعيين BOT_TOKEN, API_ID, API_HASH في متغيرات البيئة")
     exit(1)
 
+# قفل لكل مستخدم لمنع التزاحم على قاعدة البيانات
+user_locks = {}
+
+def get_user_lock(user_id):
+    if user_id not in user_locks:
+        user_locks[user_id] = asyncio.Lock()
+    return user_locks[user_id]
+
 # قاموس لتخزين عمليات تسجيل الدخول المؤقتة
 login_sessions = {}
 
@@ -39,12 +48,12 @@ def load_user_data(user_id):
 
 def save_user_data(user_id, data):
     with open(get_user_data_file(user_id), 'w') as f:
-        json.dump(data, f)
+        json.dump(data, f, indent=4)
 
 def get_user_session_name(user_id):
     return os.path.join(SESSIONS_DIR, f"user_{user_id}")
 
-# ========== دوال الأزرار (الصيغة الصحيحة) ==========
+# ========== دوال الأزرار ==========
 def get_main_keyboard(user_data):
     if not user_data.get('logged_in'):
         return [[Button.inline("🔐 تسجيل الدخول", b"login")]]
@@ -170,6 +179,8 @@ async def start_sending_callback(event):
     
     await event.answer("🚀 جاري البدء...", alert=True)
     await event.respond("🚀 بدء عملية الإرسال...")
+    
+    # تشغيل المهمة في الخلفية مع قفل للمستخدم
     asyncio.create_task(send_task(user_id, event))
 
 @bot.on(events.CallbackQuery(data=b"stop_sending"))
@@ -210,7 +221,10 @@ async def status_callback(event):
 ✅ تم الإرسال: {sent}
 ⏳ المتبقي: {len(cards) - sent}
 """
-    await event.edit(text, buttons=get_main_keyboard(user_data))
+    try:
+        await event.edit(text, buttons=get_main_keyboard(user_data))
+    except Exception:
+        pass
 
 @bot.on(events.CallbackQuery(data=b"back_main"))
 async def back_main_callback(event):
@@ -346,7 +360,7 @@ async def handle_messages(event):
             await event.respond("❌ أرسل رقمين بينهم مسافة (مثال: 30 60)")
         return
     
-    # ========== الجزء الجديد: استقبال الملف ثم طلب الأمر ==========
+    # ========== رفع الملف وطلب الأمر ==========
     if step == "waiting_for_file":
         if event.document and event.document.mime_type == "text/plain":
             file_path = os.path.join(TEMP_DIR, f"{user_id}_cards.txt")
@@ -355,7 +369,6 @@ async def handle_messages(event):
             with open(file_path, 'r') as f:
                 cards = [line.strip() for line in f if line.strip()]
             
-            # حفظ البطاقات في الجلسة المؤقتة
             login_sessions[user_id]["cards"] = cards
             login_sessions[user_id]["step"] = "waiting_for_command"
             
@@ -377,14 +390,12 @@ async def handle_messages(event):
             command = '/' + command
         
         cards = login_sessions[user_id].get("cards", [])
-        target_bot = login_sessions[user_id].get("target_bot")
         
         if not cards:
             await event.respond("❌ لا توجد بطاقات! ارفع الملف مرة أخرى")
             del login_sessions[user_id]
             return
         
-        # حفظ في ملف المستخدم
         user_data = load_user_data(user_id)
         user_data['cards'] = cards
         user_data['command'] = command
@@ -393,7 +404,6 @@ async def handle_messages(event):
         user_data['is_sending'] = False
         save_user_data(user_id, user_data)
         
-        # حذف الجلسة المؤقتة
         del login_sessions[user_id]
         
         await event.respond(
@@ -405,51 +415,64 @@ async def handle_messages(event):
         )
         return
 
-# ========== مهمة الإرسال ==========
+# ========== مهمة الإرسال (المعدلة) ==========
 async def send_task(user_id, event):
-    user_data = load_user_data(user_id)
-    user_data['is_sending'] = True
-    save_user_data(user_id, user_data)
+    # استخدام قفل لمنع تزاحم العمليات على نفس المستخدم
+    user_lock = get_user_lock(user_id)
     
-    session_name = get_user_session_name(user_id)
-    client = TelegramClient(session_name, API_ID, API_HASH)
-    await client.start()
-    
-    cards = user_data.get('cards', [])
-    target = user_data.get('target_bot')
-    command = user_data.get('command', '/ad')  # الأمر اللي خزنه المستخدم
-    delay_range = user_data.get('delay_range', [30, 90])
-    start_idx = user_data.get('current_index', 0)
-    
-    for i in range(start_idx, len(cards)):
-        current_data = load_user_data(user_id)
-        if not current_data.get('is_sending'):
-            await event.respond("🛑 تم إيقاف الإرسال")
-            break
+    async with user_lock:
+        user_data = load_user_data(user_id)
+        user_data['is_sending'] = True
+        save_user_data(user_id, user_data)
+        
+        session_name = get_user_session_name(user_id)
+        client = None
         
         try:
-            # إرسال الأمر + البطاقة معاً
-            full_message = f"{command} {cards[i]}"
-            await client.send_message(target, full_message)
+            # إنشاء عميل جديد لكل مهمة
+            client = TelegramClient(session_name, API_ID, API_HASH)
+            await client.start()
             
-            user_data['sent_count'] = i + 1
-            user_data['current_index'] = i + 1
+            cards = user_data.get('cards', [])
+            target = user_data.get('target_bot')
+            command = user_data.get('command', '/ad')
+            delay_range = user_data.get('delay_range', [30, 90])
+            start_idx = user_data.get('current_index', 0)
+            
+            for i in range(start_idx, len(cards)):
+                current_data = load_user_data(user_id)
+                if not current_data.get('is_sending'):
+                    await event.respond("🛑 تم إيقاف الإرسال")
+                    break
+                
+                try:
+                    full_message = f"{command} {cards[i]}"
+                    await client.send_message(target, full_message)
+                    
+                    user_data['sent_count'] = i + 1
+                    user_data['current_index'] = i + 1
+                    save_user_data(user_id, user_data)
+                    
+                    delay = random.randint(delay_range[0], delay_range[1])
+                    await event.respond(f"✅ [{i+1}/{len(cards)}] تم الإرسال: {cards[i][:40]}...\n⏱ انتظر {delay} ثانية")
+                    await asyncio.sleep(delay)
+                    
+                except FloodWaitError as e:
+                    await event.respond(f"⚠️ انتظر {e.seconds} ثانية")
+                    await asyncio.sleep(e.seconds)
+                except Exception as e:
+                    await event.respond(f"❌ خطأ: {str(e)[:50]}")
+                    await asyncio.sleep(5)
+            
+            user_data['is_sending'] = False
             save_user_data(user_id, user_data)
+            await event.respond("🎉 تم الانتهاء من الإرسال!")
             
-            delay = random.randint(delay_range[0], delay_range[1])
-            await event.respond(f"✅ [{i+1}/{len(cards)}] تم الإرسال: {cards[i][:40]}...\n📝 الأمر: {command}\n⏱ انتظر {delay} ثانية")
-            await asyncio.sleep(delay)
-            
-        except FloodWaitError as e:
-            await event.respond(f"⚠️ انتظر {e.seconds} ثانية")
-            await asyncio.sleep(e.seconds)
         except Exception as e:
-            await event.respond(f"❌ خطأ: {str(e)[:50]}")
-            await asyncio.sleep(5)
-    
-    user_data['is_sending'] = False
-    save_user_data(user_id, user_data)
-    await event.respond("🎉 تم الانتهاء من الإرسال!")
+            await event.respond(f"❌ خطأ جلسة: {str(e)[:100]}")
+        finally:
+            if client:
+                await client.disconnect()
 
 # ========== تشغيل البوت ==========
 print("🚀 البوت يعمل 24/7...")
