@@ -63,6 +63,53 @@ print("✅ البوت شغال...")
 # قاموس لتخزين جلسات المستخدمين المؤقتة
 user_steps = {}
 
+# ========== معالجة الملفات مباشرة (الأهم) ==========
+@bot.on(events.NewMessage(func=lambda e: e.document))
+async def handle_document(event):
+    user_id = str(event.sender_id)
+    user_data = load_user_data(user_id)
+    
+    # التحقق من تسجيل الدخول
+    if not user_data.get('logged_in'):
+        await event.respond("❌ يرجى تسجيل الدخول أولاً! استخدم /start")
+        return
+    
+    # التحقق من نوع الملف
+    if not event.document.file_name.endswith('.txt'):
+        await event.respond("❌ يرجى إرسال ملف `.txt` فقط")
+        return
+    
+    # تحميل الملف
+    status_msg = await event.respond("🔄 جاري تحميل الملف...")
+    
+    file_path = os.path.join(TEMP_DIR, f"{user_id}_cards.txt")
+    await event.download_media(file_path)
+    
+    # قراءة البطاقات
+    with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+        cards = [line.strip() for line in f if line.strip()]
+    
+    os.remove(file_path)
+    
+    if not cards:
+        await status_msg.edit("❌ الملف لا يحتوي على بطاقات صالحة!")
+        return
+    
+    # حفظ البطاقات
+    user_data['cards'] = cards
+    user_data['sent_count'] = 0
+    user_data['current_index'] = 0
+    user_data['setup_complete'] = True
+    save_user_data(user_id, user_data)
+    
+    await status_msg.edit(
+        f"✅ **تم رفع {len(cards)} بطاقة بنجاح!**\n\n"
+        f"🎯 **أرسل يوزر البوت الهدف**\nمثال: @example_bot"
+    )
+    
+    # انتظار البوت الهدف
+    user_steps[user_id] = {"step": "target"}
+
 # ========== أمر /start ==========
 @bot.on(events.NewMessage(pattern="/start"))
 async def start_cmd(event):
@@ -70,7 +117,10 @@ async def start_cmd(event):
     user_data = load_user_data(user_id)
     
     if user_data.get('logged_in'):
-        text = "✅ مرحباً! أنت مسجل دخول.\n\nاضغط على 📊 الحالة لمتابعة الفحص"
+        if user_data.get('cards'):
+            text = f"✅ مرحباً! أنت مسجل دخول.\n📦 عدد البطاقات المحفوظة: {len(user_data.get('cards', []))}\n\nاضغط على 📊 الحالة لمتابعة الفحص"
+        else:
+            text = "✅ أنت مسجل دخول!\n\n📁 **أرسل ملف txt الآن**"
     else:
         text = "🔐 أهلاً بك!\n\nاضغط على زر تسجيل الدخول للمتابعة"
     
@@ -118,9 +168,9 @@ async def status_callback(event):
     
     cards = user_data.get('cards', [])
     sent = user_data.get('sent_count', 0)
-    delay = user_data.get('delay_range', ['-', '-'])
-    command = user_data.get('command', '-')
-    target = user_data.get('target_bot', '-')
+    delay = user_data.get('delay_range', ['لم يحدد', 'لم يحدد'])
+    command = user_data.get('command', 'لم يحدد')
+    target = user_data.get('target_bot', 'لم يحدد')
     
     text = f"""
 📊 **حالة الحساب**
@@ -142,7 +192,7 @@ async def back_callback(event):
     user_data = load_user_data(user_id)
     await event.edit("📋 القائمة الرئيسية:", buttons=get_main_keyboard(user_data))
 
-# ========== معالجة الرسائل ==========
+# ========== معالجة الرسائل النصية ==========
 @bot.on(events.NewMessage)
 async def handle_messages(event):
     if event.sender_id == (await bot.get_me()).id:
@@ -151,11 +201,15 @@ async def handle_messages(event):
     user_id = str(event.sender_id)
     text = event.raw_text.strip()
     
+    # تخطي الملفات
+    if event.document:
+        return
+    
     # إذا كان المستخدم في جلسة
     if user_id in user_steps:
         step = user_steps[user_id].get("step")
         
-        # تسجيل الدخول
+        # تسجيل الدخول - رقم الهاتف
         if step == "phone":
             phone = text if text.startswith('+') else '+' + text
             user_steps[user_id]["phone"] = phone
@@ -173,6 +227,7 @@ async def handle_messages(event):
                 del user_steps[user_id]
             return
         
+        # تسجيل الدخول - رمز التحقق
         if step == "code":
             client = user_steps[user_id].get("client")
             phone = user_steps[user_id].get("phone")
@@ -183,8 +238,6 @@ async def handle_messages(event):
                 
                 user_data = {
                     'logged_in': True,
-                    'setup_complete': False,
-                    'phone': phone,
                     'target_bot': None,
                     'command': None,
                     'cards': [],
@@ -201,7 +254,6 @@ async def handle_messages(event):
                     parse_mode='md',
                     buttons=get_back_button()
                 )
-                user_steps[user_id] = {"step": "file"}
                 
             except SessionPasswordNeededError:
                 user_steps[user_id]["step"] = "password"
@@ -211,6 +263,7 @@ async def handle_messages(event):
                 del user_steps[user_id]
             return
         
+        # تسجيل الدخول - كلمة المرور (2FA)
         if step == "password":
             client = user_steps[user_id].get("client")
             try:
@@ -219,8 +272,6 @@ async def handle_messages(event):
                 
                 user_data = {
                     'logged_in': True,
-                    'setup_complete': False,
-                    'phone': user_steps[user_id].get("phone"),
                     'target_bot': None,
                     'command': None,
                     'cards': [],
@@ -237,41 +288,11 @@ async def handle_messages(event):
                     parse_mode='md',
                     buttons=get_back_button()
                 )
-                user_steps[user_id] = {"step": "file"}
             except Exception as e:
                 await event.respond(f"❌ كلمة مرور خاطئة: {str(e)[:100]}")
             return
         
-        # رفع الملف
-        if step == "file":
-            if event.document and event.document.file_name.endswith('.txt'):
-                file_path = os.path.join(TEMP_DIR, f"{user_id}.txt")
-                await event.download_media(file_path)
-                
-                with open(file_path, 'r') as f:
-                    cards = [line.strip() for line in f if line.strip()]
-                os.remove(file_path)
-                
-                user_data = load_user_data(user_id)
-                user_data['cards'] = cards
-                user_data['sent_count'] = 0
-                user_data['current_index'] = 0
-                save_user_data(user_id, user_data)
-                
-                del user_steps[user_id]
-                
-                await event.respond(
-                    f"✅ تم رفع {len(cards)} بطاقة\n\n"
-                    "🎯 **أرسل يوزر البوت الهدف**\nمثال: @example_bot",
-                    parse_mode='md',
-                    buttons=get_back_button()
-                )
-                user_steps[user_id] = {"step": "target"}
-            else:
-                await event.respond("❌ يرجى إرسال ملف txt صالح")
-            return
-        
-        # البوت الهدف
+        # استقبال البوت الهدف
         if step == "target":
             if text.startswith('@'):
                 user_data = load_user_data(user_id)
@@ -292,7 +313,7 @@ async def handle_messages(event):
                 await event.respond("❌ يرجى إرسال يوزر يبدأ بـ @")
             return
         
-        # وقت التأخير
+        # استقبال وقت التأخير
         if step == "delay":
             parts = text.split()
             if len(parts) >= 2:
@@ -323,13 +344,12 @@ async def handle_messages(event):
                 await event.respond("❌ أرسل رقمين بينهم مسافة (مثال: 50 140)")
             return
         
-        # أمر الفحص
+        # استقبال أمر الفحص
         if step == "command":
             command = text if text.startswith('/') else '/' + text
             
             user_data = load_user_data(user_id)
             user_data['command'] = command
-            user_data['setup_complete'] = True
             save_user_data(user_id, user_data)
             
             del user_steps[user_id]
@@ -358,7 +378,6 @@ async def send_task(user_id, event):
     user_data = load_user_data(user_id)
     session_file = get_user_session_name(user_id) + ".session"
     
-    # حذف الجلسة القديمة إن وجدت
     if os.path.exists(session_file):
         try:
             os.remove(session_file)
@@ -402,13 +421,13 @@ async def send_task(user_id, event):
                 await event.respond(f"⚠️ انتظر {e.seconds} ثانية")
                 await asyncio.sleep(e.seconds)
             except Exception as e:
-                await event.respond(f"❌ خطأ: {str(e)[:50]}")
+                await event.respond(f"❌ خطأ في الإرسال: {str(e)[:50]}")
                 await asyncio.sleep(5)
         
         await event.respond("🎉 **تم الانتهاء من الإرسال!**")
         
     except Exception as e:
-        await event.respond(f"❌ خطأ: {str(e)[:100]}\nيرجى استخدام /reset ثم /start")
+        await event.respond(f"❌ خطأ في الجلسة: {str(e)[:100]}\nيرجى استخدام /reset ثم /start")
     finally:
         if client:
             await client.disconnect()
@@ -420,7 +439,7 @@ async def send_task(user_id, event):
 
 # ========== تشغيل البوت ==========
 print("🚀 البوت يعمل 24/7...")
-print("✅ يدعم عدة مستخدمين")
+print("✅ يدعم رفع الملفات مباشرة")
 
 while True:
     try:
