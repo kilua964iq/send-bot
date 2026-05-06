@@ -24,7 +24,7 @@ if not BOT_TOKEN or not API_ID or not API_HASH:
     print("❌ يرجى تعيين BOT_TOKEN, API_ID, API_HASH في متغيرات البيئة")
     exit(1)
 
-# أقفال للمستخدمين (لكل مستخدم قفل منفصل)
+# أقفال للمستخدمين
 user_locks = {}
 
 def get_user_lock(user_id):
@@ -32,7 +32,6 @@ def get_user_lock(user_id):
         user_locks[user_id] = asyncio.Lock()
     return user_locks[user_id]
 
-# قاموس لتخزين عمليات تسجيل الدخول المؤقتة
 login_sessions = {}
 
 def get_user_data_file(user_id):
@@ -75,6 +74,16 @@ print("✅ البوت شغال...")
 async def start_cmd(event):
     user_id = str(event.sender_id)
     user_data = load_user_data(user_id)
+    
+    # حذف الجلسة التالفة إذا وجدت
+    session_file = get_user_session_name(user_id) + ".session"
+    if os.path.exists(session_file):
+        try:
+            # محاولة قراءة الملف للتأكد من أنه سليم
+            with open(session_file, 'rb') as f:
+                f.read(10)
+        except:
+            os.remove(session_file)
     
     if user_data.get('logged_in') and user_data.get('setup_complete'):
         text = "✅ مرحباً! أنت مسجل دخول ومكتمل الإعداد.\n\nاضغط على 📊 الحالة لمتابعة الفحص"
@@ -168,7 +177,6 @@ async def handle_messages(event):
     user_id = str(event.sender_id)
     text = event.raw_text.strip()
     
-    # إذا كان المستخدم في جلسة تسجيل دخول
     if user_id in login_sessions:
         step = login_sessions[user_id].get("step")
         
@@ -181,6 +189,10 @@ async def handle_messages(event):
             login_sessions[user_id]["step"] = "code"
             
             session_name = get_user_session_name(user_id)
+            # حذف الجلسة القديمة قبل إنشاء جديدة
+            if os.path.exists(session_name + ".session"):
+                os.remove(session_name + ".session")
+            
             client = TelegramClient(session_name, API_ID, API_HASH)
             login_sessions[user_id]["client"] = client
             
@@ -222,7 +234,6 @@ async def handle_messages(event):
                     parse_mode='md',
                     buttons=get_back_button()
                 )
-                # ننتظر الملف مباشرة
                 login_sessions[user_id] = {"step": "waiting_for_file"}
                 
             except SessionPasswordNeededError:
@@ -267,7 +278,6 @@ async def handle_messages(event):
                 await event.respond(f"❌ كلمة مرور خاطئة: {str(e)[:100]}")
             return
         
-        # ========== استقبال الملف ==========
         if step == "waiting_for_file":
             if event.document and event.document.mime_type == "text/plain":
                 file_path = os.path.join(TEMP_DIR, f"{user_id}_cards.txt")
@@ -276,7 +286,6 @@ async def handle_messages(event):
                 with open(file_path, 'r') as f:
                     cards = [line.strip() for line in f if line.strip()]
                 
-                # حفظ البطاقات في ملف المستخدم
                 user_data = load_user_data(user_id)
                 user_data['cards'] = cards
                 user_data['sent_count'] = 0
@@ -296,7 +305,6 @@ async def handle_messages(event):
                 await event.respond("❌ يرجى إرسال ملف txt صالح")
             return
         
-        # ========== استقبال البوت الهدف ==========
         if step == "waiting_target":
             if text.startswith('@'):
                 user_data = load_user_data(user_id)
@@ -317,7 +325,6 @@ async def handle_messages(event):
                 await event.respond("❌ يرجى إرسال يوزر يبدأ بـ @")
             return
         
-        # ========== استقبال وقت التأخير ==========
         if step == "waiting_delay":
             parts = text.split()
             if len(parts) >= 2:
@@ -350,7 +357,6 @@ async def handle_messages(event):
                 await event.respond("❌ أرسل رقمين بينهم مسافة (مثال: 50 140)")
             return
         
-        # ========== استقبال أمر الفحص ==========
         if step == "waiting_command":
             command = text.strip()
             if not command.startswith('/'):
@@ -380,17 +386,13 @@ async def handle_messages(event):
                 buttons=get_main_keyboard(user_data)
             )
             
-            # بدء الفحص تلقائياً
             asyncio.create_task(send_task(user_id, event))
             return
     
-    # إذا كان المستخدم مسجل دخول وليس في جلسة، نتعامل مع أوامر أخرى
     user_data = load_user_data(user_id)
     if user_data.get('logged_in') and user_id not in login_sessions:
         if text == "/start":
             return
-        
-        # إذا كان الفحص قيد التشغيل، نمنع إرسال ملف جديد
         if user_data.get('is_sending'):
             await event.respond("⚠️ يوجد فحص قيد التشغيل! انتظر حتى ينتهي أو أوقفه من القائمة")
             return
@@ -410,15 +412,16 @@ async def send_task(user_id, event):
         save_user_data(user_id, user_data)
         
         session_name = get_user_session_name(user_id)
-        client = None
-        
-        # حذف ملف الجلسة القديم إذا وجد
         session_file = session_name + ".session"
+        
+        # حذف الجلسة القديمة
         if os.path.exists(session_file):
             try:
                 os.remove(session_file)
             except:
                 pass
+        
+        client = None
         
         try:
             client = TelegramClient(session_name, API_ID, API_HASH)
@@ -430,7 +433,13 @@ async def send_task(user_id, event):
             delay_range = user_data.get('delay_range', [50, 140])
             start_idx = user_data.get('current_index', 0)
             
-            await event.respond(f"🚀 **بدء إرسال {len(cards)} بطاقة**\n⏱ تأخير عشوائي {delay_range[0]}-{delay_range[1]} ثانية")
+            if not cards:
+                await event.respond("❌ لا توجد بطاقات!")
+                user_data['is_sending'] = False
+                save_user_data(user_id, user_data)
+                return
+            
+            await event.respond(f"🚀 **بدء إرسال {len(cards)} بطاقة**\n🎯 الهدف: {target}")
             
             for i in range(start_idx, len(cards)):
                 current_data = load_user_data(user_id)
@@ -446,12 +455,9 @@ async def send_task(user_id, event):
                     user_data['current_index'] = i + 1
                     save_user_data(user_id, user_data)
                     
-                    # تأخير عشوائي
                     delay = random.randint(delay_range[0], delay_range[1])
-                    
                     await event.respond(f"✅ [{i+1}/{len(cards)}] تم الإرسال\n⏱ انتظر {delay} ثانية")
                     
-                    # التأخير مع إمكانية الإيقاف
                     for _ in range(delay):
                         current = load_user_data(user_id)
                         if not current.get('is_sending'):
@@ -459,36 +465,32 @@ async def send_task(user_id, event):
                         await asyncio.sleep(1)
                     
                 except FloodWaitError as e:
-                    await event.respond(f"⚠️ انتظر {e.seconds} ثانية (FloodWait)")
+                    await event.respond(f"⚠️ انتظر {e.seconds} ثانية")
                     await asyncio.sleep(e.seconds)
                 except Exception as e:
-                    await event.respond(f"❌ خطأ في الإرسال: {str(e)[:50]}")
+                    await event.respond(f"❌ خطأ: {str(e)[:50]}")
                     await asyncio.sleep(5)
             
             user_data['is_sending'] = False
             save_user_data(user_id, user_data)
-            await event.respond("🎉 **تم الانتهاء من إرسال جميع البطاقات!**")
+            await event.respond("🎉 **تم الانتهاء من الإرسال!**")
             
         except Exception as e:
-            await event.respond(f"❌ خطأ في الجلسة: {str(e)[:100]}")
+            await event.respond(f"❌ خطأ: {str(e)[:100]}\nيرجى إعادة تشغيل البوت باستخدام /start")
+            user_data['logged_in'] = False
             user_data['is_sending'] = False
             save_user_data(user_id, user_data)
+            if os.path.exists(session_file):
+                os.remove(session_file)
         finally:
             if client:
                 try:
                     await client.disconnect()
                 except:
                     pass
-            # حذف ملف الجلسة بعد الانتهاء
-            if os.path.exists(session_file):
-                try:
-                    os.remove(session_file)
-                except:
-                    pass
 
 # ========== تشغيل البوت ==========
 print("🚀 البوت يعمل 24/7...")
-print("✅ يدعم عدة مستخدمين في نفس الوقت")
 
 while True:
     try:
