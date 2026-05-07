@@ -762,7 +762,7 @@ main_conv = ConversationHandler(
         WAIT_FILE:    [MessageHandler(filters.Document.ALL, wait_file)],
         WAIT_TARGET:  [MessageHandler(filters.TEXT & ~filters.COMMAND, wait_target)],
         WAIT_DELAY:   [MessageHandler(filters.TEXT & ~filters.COMMAND, wait_delay)],
-        WAIT_COMMAND: [MessageHandler(filters.TEXT & ~filters.COMMAND, wait_command)],
+        WAIT_COMMAND: [MessageHandler(filters.TEXT, wait_command)],  # يقبل /cmd أيضاً
     },
     fallbacks=[CommandHandler("reset", cmd_reset)],
     per_message=False,
