@@ -1,3 +1,13 @@
+"""
+╔══════════════════════════════════════════════════════════╗
+║           Telegram Card Checker Bot  v2.0               ║
+║  متغيرات البيئة:                                        ║
+║    BOT_TOKEN  – توكن البوت من @BotFather               ║
+║    API_ID     – من my.telegram.org                      ║
+║    API_HASH   – من my.telegram.org                      ║
+╚══════════════════════════════════════════════════════════╝
+"""
+
 import os
 import json
 import random
@@ -878,7 +888,7 @@ task_setup_conv = ConversationHandler(
         WAIT_COMMAND: [MessageHandler(filters.TEXT & ~filters.COMMAND, wait_command)],
     },
     fallbacks=[CommandHandler("reset", cmd_reset)],
-    per_message=False,
+    per_message=True,   # ← إصلاح PTBUserWarning: entry_point هو CallbackQueryHandler
     allow_reentry=True,
 )
 
@@ -887,6 +897,21 @@ task_setup_conv = ConversationHandler(
 # ══════════════════════════════════════════════════════════
 
 def main():
+    # ── إصلاح 409 Conflict: حذف أي webhook أو جلسة polling قديمة ──
+    import httpx, time
+    for attempt in range(3):
+        try:
+            r = httpx.post(
+                f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook",
+                json={"drop_pending_updates": True},
+                timeout=10,
+            )
+            logger.info(f"deleteWebhook response: {r.json()}")
+            break
+        except Exception as e:
+            logger.warning(f"deleteWebhook attempt {attempt+1} failed: {e}")
+            time.sleep(2)
+
     app = (
         Application.builder()
         .token(BOT_TOKEN)
@@ -929,10 +954,22 @@ def main():
     logger.info("  ✅  Card Checker Bot v2.0 started successfully!")
     logger.info("=" * 55)
 
-    app.run_polling(
-        drop_pending_updates=True,
-        allowed_updates=Update.ALL_TYPES,
-    )
+    # ── run_polling مع معالجة 409 Conflict ──────────────
+    import time as _time
+    for _attempt in range(5):
+        try:
+            app.run_polling(
+                drop_pending_updates=True,
+                allowed_updates=Update.ALL_TYPES,
+                close_loop=False,
+            )
+            break
+        except Exception as _e:
+            if "409" in str(_e) or "Conflict" in str(_e):
+                logger.warning(f"409 Conflict – waiting 5s before retry ({_attempt+1}/5)...")
+                _time.sleep(5)
+            else:
+                raise
 
 
 if __name__ == "__main__":
