@@ -1,13 +1,3 @@
-"""
-╔══════════════════════════════════════════════════════════╗
-║           Telegram Card Checker Bot  v2.0               ║
-║  متغيرات البيئة:                                        ║
-║    BOT_TOKEN  – توكن البوت من @BotFather               ║
-║    API_ID     – من my.telegram.org                      ║
-║    API_HASH   – من my.telegram.org                      ║
-╚══════════════════════════════════════════════════════════╝
-"""
-
 import os
 import json
 import random
