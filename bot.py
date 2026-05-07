@@ -200,7 +200,7 @@ async def wait_phone(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         ctx.user_data["phone_hash"] = result.phone_code_hash
         await msg.edit_text(
             "📩 أرسل رمز التحقق الذي وصلك على تيليجرام:\n"
-            "_(أرسل الأرقام فقط بمسافات مثال 1 2 3 4 5)_",  # ✅ تم التعديل
+            "_(أرسل الأرقام بمسافات بين كل رقم، مثال: 1 2 3 4 5)_",
             parse_mode="Markdown",
         )
         return WAIT_CODE
@@ -220,7 +220,7 @@ async def wait_phone(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def wait_code(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid  = update.effective_user.id
-    # ✅ إزالة المسافات للسماح للمستخدم بإدخالها مع مسافات
+    # المستخدم يرسل الرمز بمسافات "1 2 3 4 5" → نحوّله إلى "12345"
     code = update.message.text.strip().replace(" ", "")
 
     try:
@@ -291,10 +291,14 @@ async def _finish_login(update: Update, uid: int, client: TelegramClient):
     return WAIT_FILE
 
 # ══════════════════════════════════════════════════════════
-# قراءة الملف
+# قراءة الملف (دالة مشتركة لتجنب التكرار)
 # ══════════════════════════════════════════════════════════
 
 async def _read_txt_file(update: Update) -> list[str] | None:
+    """
+    يقرأ ملف txt من الرسالة ويُعيد قائمة البطاقات.
+    يُعيد None عند أي خطأ بعد إرسال رسالة الخطأ للمستخدم.
+    """
     doc = update.message.document
     if not doc:
         await update.message.reply_text("❌ يرجى إرسال ملف `.txt`.", parse_mode="Markdown")
@@ -322,18 +326,13 @@ async def _read_txt_file(update: Update) -> list[str] | None:
     return cards
 
 # ══════════════════════════════════════════════════════════
-# معالج الملفات والنصوص الموحد (تم الدمج والتعديل)
+# ★ التعديل الأول: معالج الملفات في أي وقت (خارج المحادثة)
 # ══════════════════════════════════════════════════════════
 
-# ✅ متغير عام لتتبع انتظار الإعداد (بديل ctx.user_data لمعالج الـ group)
-awaiting_setup: dict[int, str] = {}  # uid -> "target" / "delay" / "command"
-
-async def handle_files_and_texts(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+async def handle_file_anytime(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """
-    معالج موحد للملفات والنصوص:
-    - يعالج الملفات .txt ويبدأ الإعداد
-    - يكمل خطوات الإعداد (target → delay → command)
-    - لا يكرر الرسائل أبداً
+    يُعالج ملفات txt المرسلة في أي وقت، حتى خارج ConversationHandler.
+    يبدأ تلقائياً تسلسل الإعداد عبر ctx.user_data["awaiting"].
     """
     uid = update.effective_user.id
 
@@ -341,36 +340,43 @@ async def handle_files_and_texts(update: Update, ctx: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text("❌ يجب تسجيل الدخول أولاً. أرسل /start")
         return
 
-    # ── الحالة 1: استقبال ملف ──────────────────────────────
-    if update.message.document:
-        cards = await _read_txt_file(update)
-        if cards is None:
-            return
-
-        data          = load_data(uid)
-        data["cards"] = cards
-        data["sent"]  = 0
-        save_data(uid, data)
-
-        # بدء تسلسل الإعداد
-        awaiting_setup[uid] = "target"
-
-        await update.message.reply_text(
-            f"✅ تم تحميل *{len(cards)}* بطاقة.\n\n"
-            f"🎯 أرسل يوزر البوت الهدف:\nمثال: `@CheckBot`",
-            parse_mode="Markdown",
-        )
+    cards = await _read_txt_file(update)
+    if cards is None:
         return
 
-    # ── الحالة 2: انتظار إعدادات بعد رفع الملف ─────────────
-    if uid not in awaiting_setup:
-        return  # ليس في وضع الإعداد، نتجاهل
+    data          = load_data(uid)
+    data["cards"] = cards
+    data["sent"]  = 0
+    save_data(uid, data)
 
-    step = awaiting_setup[uid]
+    # نبدأ تسلسل الإعداد اليدوي
+    ctx.user_data["awaiting"] = "target"
+
+    await update.message.reply_text(
+        f"✅ تم تحميل *{len(cards)}* بطاقة.\n\n"
+        f"🎯 أرسل يوزر البوت الهدف:\nمثال: `@CheckBot`",
+        parse_mode="Markdown",
+    )
+
+# ══════════════════════════════════════════════════════════
+# معالج النصوص خارج المحادثة (استكمال الإعداد)
+# ══════════════════════════════════════════════════════════
+
+async def handle_text_anytime(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    يكمل خطوات الإعداد (target → delay → command)
+    بعد رفع الملف عبر handle_file_anytime.
+    """
+    uid      = update.effective_user.id
+    awaiting = ctx.user_data.get("awaiting")
+
+    if not awaiting or not is_logged_in(uid):
+        return
+
     text = update.message.text.strip()
 
     # ── الخطوة 1: البوت الهدف ─────────────────────────────
-    if step == "target":
+    if awaiting == "target":
         if not text.startswith("@") or len(text) < 2:
             await update.message.reply_text(
                 "❌ يجب أن يبدأ اليوزر بـ `@`\nمثال: `@CheckBot`",
@@ -380,7 +386,7 @@ async def handle_files_and_texts(update: Update, ctx: ContextTypes.DEFAULT_TYPE)
         data           = load_data(uid)
         data["target"] = text
         save_data(uid, data)
-        awaiting_setup[uid] = "delay"
+        ctx.user_data["awaiting"] = "delay"
         await update.message.reply_text(
             "⏱ أرسل وقت التأخير (رقمان بينهما مسافة، الحد الأدنى 50):\n"
             "مثال: `50 140`",
@@ -388,7 +394,7 @@ async def handle_files_and_texts(update: Update, ctx: ContextTypes.DEFAULT_TYPE)
         )
 
     # ── الخطوة 2: التأخير ─────────────────────────────────
-    elif step == "delay":
+    elif awaiting == "delay":
         parts = text.split()
         if len(parts) != 2:
             await update.message.reply_text(
@@ -411,19 +417,19 @@ async def handle_files_and_texts(update: Update, ctx: ContextTypes.DEFAULT_TYPE)
         data["delay_lo"] = lo
         data["delay_hi"] = hi
         save_data(uid, data)
-        awaiting_setup[uid] = "command"
+        ctx.user_data["awaiting"] = "command"
         await update.message.reply_text(
             "✉️ أرسل أمر الفحص الذي يُرسل مع كل بطاقة:\n"
-            "مثال: `/chk`",  # ✅ تم التعديل من /ad إلى /chk حسب المثال
+            "مثال: `/ad`",
             parse_mode="Markdown",
         )
 
     # ── الخطوة 3: أمر الفحص ──────────────────────────────
-    elif step == "command":
+    elif awaiting == "command":
         data                  = load_data(uid)
         data["check_command"] = text
         save_data(uid, data)
-        awaiting_setup.pop(uid, None)  # إنهاء الإعداد
+        ctx.user_data.pop("awaiting", None)
         total = len(data.get("cards", []))
         await update.message.reply_text(
             f"🎉 *الإعداد مكتمل!*\n\n"
@@ -453,14 +459,11 @@ async def ask_file(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if task and not task.done():
         task.cancel()
 
-    # مسح بيانات المهمة
+    # مسح بيانات المهمة مع الإبقاء على الجلسة
     data = load_data(uid)
     for key in ["cards", "sent", "target", "delay_lo", "delay_hi", "check_command"]:
         data.pop(key, None)
     save_data(uid, data)
-    
-    # مسح حالة الإعداد الموحد أيضاً
-    awaiting_setup.pop(uid, None)
 
     send_fn = query.message.reply_text if query else update.message.reply_text
     await send_fn(
@@ -546,7 +549,7 @@ async def wait_delay(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         "✉️ أرسل أمر الفحص الذي يُرسل مع كل بطاقة:\n"
-        "مثال: `/chk`",  # ✅ تم التعديل
+        "مثال: `/ad`",
         parse_mode="Markdown",
     )
     return WAIT_COMMAND
@@ -627,6 +630,7 @@ async def _send_cards(uid: int, bot, chat_id: int):
             card    = cards[i]
             message = f"{cmd} {card}".strip()
 
+            # ── إرسال مع معالجة FloodWait ─────────────────
             try:
                 await client.send_message(target, message)
                 consecutive_errors = 0
@@ -653,10 +657,12 @@ async def _send_cards(uid: int, bot, chat_id: int):
                     parse_mode="Markdown",
                 )
 
+            # ── حفظ التقدم فوراً ──────────────────────────
             d         = load_data(uid)
             d["sent"] = i + 1
             save_data(uid, d)
 
+            # ── إيقاف تلقائي عند 5 أخطاء متتالية ─────────
             if consecutive_errors >= 5:
                 await bot.send_message(
                     chat_id,
@@ -667,6 +673,7 @@ async def _send_cards(uid: int, bot, chat_id: int):
                 )
                 return
 
+            # ── تحديث رسالة التقدم كل 10 بطاقات ──────────
             if (i + 1) % 10 == 0 or (i + 1) == total:
                 filled = int(10 * (i + 1) / total)
                 bar    = "█" * filled + "░" * (10 - filled)
@@ -681,10 +688,12 @@ async def _send_cards(uid: int, bot, chat_id: int):
                 except Exception:
                     pass
 
+            # ── تأخير عشوائي ──────────────────────────────
             if i < total - 1:
                 delay = random.randint(lo, hi)
                 await asyncio.sleep(delay)
 
+        # ── اكتمل الإرسال ─────────────────────────────────
         await bot.send_message(
             chat_id,
             f"🎉 *تم إرسال جميع البطاقات بنجاح!*\n\n🃏 المجموع: {total} بطاقة",
@@ -756,6 +765,7 @@ async def cb_stop_sending(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     task = sending_tasks.get(uid)
     if task and not task.done():
         task.cancel()
+        # رسالة الإيقاف تُرسَل من داخل _send_cards
     else:
         await query.message.reply_text(
             "ℹ️ لا يوجد إرسال جارٍ حالياً.",
@@ -824,9 +834,6 @@ async def cb_logout(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if p.exists():
         p.unlink()
 
-    # مسح حالة الإعداد الموحد أيضاً
-    awaiting_setup.pop(uid, None)
-
     await query.message.reply_text(
         "👋 *تم تسجيل الخروج بنجاح.*\n\n"
         "تم حذف الجلسة وجميع البيانات.\n"
@@ -848,7 +855,6 @@ async def cmd_reset(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if p.exists():
         p.unlink()
     ctx.user_data.clear()
-    awaiting_setup.pop(uid, None)  # ✅ مسح الحالة
     await update.message.reply_text(
         "🗑 تم مسح جميع بياناتك.\n\nأرسل /start للبدء من جديد."
     )
@@ -858,8 +864,13 @@ async def cmd_reset(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 # ConversationHandlers
 # ══════════════════════════════════════════════════════════
 
-login_conv = ConversationHandler(
-    entry_points=[CommandHandler("start", cmd_start)],
+# محادثة واحدة موحّدة تغطي تسجيل الدخول + إعداد المهمة
+# entry_points تشمل /start وزر "مهمة جديدة" معاً لتجنب تشغيل محادثتين في نفس الوقت
+main_conv = ConversationHandler(
+    entry_points=[
+        CommandHandler("start", cmd_start),
+        CallbackQueryHandler(ask_file, pattern="^reset_task$"),
+    ],
     states={
         WAIT_PHONE:   [MessageHandler(filters.TEXT & ~filters.COMMAND, wait_phone)],
         WAIT_CODE:    [MessageHandler(filters.TEXT & ~filters.COMMAND, wait_code)],
@@ -874,24 +885,12 @@ login_conv = ConversationHandler(
     allow_reentry=True,
 )
 
-task_setup_conv = ConversationHandler(
-    entry_points=[CallbackQueryHandler(ask_file, pattern="^reset_task$")],
-    states={
-        WAIT_FILE:    [MessageHandler(filters.Document.ALL, wait_file)],
-        WAIT_TARGET:  [MessageHandler(filters.TEXT & ~filters.COMMAND, wait_target)],
-        WAIT_DELAY:   [MessageHandler(filters.TEXT & ~filters.COMMAND, wait_delay)],
-        WAIT_COMMAND: [MessageHandler(filters.TEXT & ~filters.COMMAND, wait_command)],
-    },
-    fallbacks=[CommandHandler("reset", cmd_reset)],
-    per_message=True,
-    allow_reentry=True,
-)
-
 # ══════════════════════════════════════════════════════════
-# main() المحسّنة
+# ★ التعديل الثاني: main() المحسّنة مع جميع المعالجات
 # ══════════════════════════════════════════════════════════
 
 def main():
+    # ── إصلاح 409 Conflict: حذف أي webhook أو جلسة polling قديمة ──
     import httpx, time
     for attempt in range(3):
         try:
@@ -916,22 +915,30 @@ def main():
         .build()
     )
 
-    # group=0 : ConversationHandlers (أعلى أولوية)
-    app.add_handler(login_conv,      group=0)
-    app.add_handler(task_setup_conv, group=0)
+    # ── group=0 : ConversationHandler الموحّد (أعلى أولوية) ──
+    app.add_handler(main_conv, group=0)
 
-    # group=1 : أوامر نصية
+    # ── group=1 : أوامر نصية ─────────────────────────────
     app.add_handler(CommandHandler("reset", cmd_reset), group=1)
 
-    # group=2 : أزرار Inline
+    # ── group=2 : أزرار Inline ───────────────────────────
     app.add_handler(CallbackQueryHandler(cb_status,        pattern="^status$"),        group=2)
     app.add_handler(CallbackQueryHandler(cb_start_sending, pattern="^start_sending$"), group=2)
     app.add_handler(CallbackQueryHandler(cb_stop_sending,  pattern="^stop_sending$"),  group=2)
     app.add_handler(CallbackQueryHandler(cb_logout,        pattern="^logout$"),        group=2)
 
-    # ✅ group=3 : معالج واحد موحد للملفات والنصوص (تم حل مشكلة الإرسال المزدوج)
+    # ── group=3 : ★ معالج الملفات في أي وقت ──────────────
+    # يعمل حتى خارج أي محادثة – يأتي بعد ConversationHandlers
+    # لكن إذا كان المستخدم داخل محادثة، سيتولى ConversationHandler الأمر (group=0)
     app.add_handler(
-        MessageHandler(filters.Document.ALL | (filters.TEXT & ~filters.COMMAND), handle_files_and_texts),
+        MessageHandler(filters.Document.ALL, handle_file_anytime),
+        group=3,
+    )
+
+    # ── group=3 : ★ معالج النصوص خارج المحادثة ───────────
+    # لاستكمال الإعداد بعد رفع الملف عبر handle_file_anytime
+    app.add_handler(
+        MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_anytime),
         group=3,
     )
 
@@ -939,6 +946,7 @@ def main():
     logger.info("  ✅  Card Checker Bot v2.0 started successfully!")
     logger.info("=" * 55)
 
+    # ── run_polling مع معالجة 409 Conflict ──────────────
     import time as _time
     for _attempt in range(5):
         try:
