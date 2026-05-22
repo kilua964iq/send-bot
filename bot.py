@@ -419,8 +419,8 @@ async def wait_delay(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ القيم يجب أن تكون أرقاماً صحيحة.")
         return WAIT_DELAY
 
-    if lo < 50:
-        await update.message.reply_text("❌ الحد الأدنى للتأخير هو 50 ثانية.")
+    if lo < 10:
+        await update.message.reply_text("❌ الحد الأدنى للتأخير هو 10 ثانية.")
         return WAIT_DELAY
     if hi < lo:
         await update.message.reply_text("❌ الحد الأعلى يجب أن يكون ≥ الحد الأدنى.")
