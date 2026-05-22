@@ -394,8 +394,8 @@ async def wait_target(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         "⏱ أرسل وقت التأخير بين البطاقات:\n"
-        "_(رقمان بينهما مسافة، الحد الأدنى 50 ثانية)_\n\n"
-        "مثال: `50 140`",
+        "_(رقمان بينهما مسافة، الحد الأدنى 10 ثانية)_\n\n"
+        "مثال: `10 140`",
         parse_mode="Markdown",
     )
     return WAIT_DELAY
@@ -408,7 +408,7 @@ async def wait_delay(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     if len(parts) != 2:
         await update.message.reply_text(
-            "❌ أرسل رقمين بينهما مسافة.\nمثال: `50 140`",
+            "❌ أرسل رقمين بينهما مسافة.\nمثال: `10 140`",
             parse_mode="Markdown",
         )
         return WAIT_DELAY
@@ -471,7 +471,7 @@ async def _send_cards(uid: int, bot, chat_id: int):
     sent   = data.get("sent", 0)
     target = data.get("target")
     cmd    = data.get("check_command", "")
-    lo     = data.get("delay_lo", 50)
+    lo     = data.get("delay_lo", 10)
     hi     = data.get("delay_hi", 140)
     total  = len(cards)
 
