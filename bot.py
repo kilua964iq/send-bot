@@ -49,7 +49,7 @@ logger = logging.getLogger(__name__)
 # ══════════════════════════════════════════════════════════
 # متغيرات البيئة
 # ══════════════════════════════════════════════════════════
-BOT_TOKEN = os.environ["8308994457:AAEHt4ZnYLScKCkwpLrMjXobcrjXPlzPh74"]
+BOT_TOKEN = os.environ["8308994457:AAGd_MoYDdS7VYkRJKUNsmZ3uYLMiW9dsVs"]
 API_ID    = int(os.environ["28095409"])
 API_HASH  = os.environ["5883d21dcb98154b67960e96dc2a690e"]
 
