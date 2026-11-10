@@ -50,8 +50,10 @@ logger = logging.getLogger(__name__)
 # متغيرات البيئة
 # ══════════════════════════════════════════════════════════
 BOT_TOKEN = os.environ["BOT_TOKEN"]
-API_ID    = int(os.environ["28095409"])
-API_HASH  = os.environ["5883d21dcb98154b67960e96dc2a690e"]
+API_ID = int(os.environ["API_ID"])
+
+
+API_HASH = os.environ["API_HASH"]
 
 # ══════════════════════════════════════════════════════════
 # مجلد البيانات
